@@ -1,0 +1,16 @@
+sentence-transformers==3.0.1
+transformers==4.43.3
+torch==2.4.0
+pillow==10.3.0
+openai==1.38.0
+google-generativeai==0.5.4
+opencv-python==4.10.0.84
+requests==2.32.3
+beautifulsoup4==4.12.3
+python-dotenv==1.0.1
+psycopg2==2.9.9
+numpy==1.26.4
+groq==0.6.0
+PyAudio==0.2.14
+faster-whisper==1.0.3
+SpeechRecognition==3.10.1
