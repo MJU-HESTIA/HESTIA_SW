@@ -16,7 +16,7 @@ import threading
 from datetime import datetime, timedelta
 import time
 import re
-import pyperclip
+# import pyperclip
 import pyaudio
 from faster_whisper import WhisperModel
 import speech_recognition as sr
@@ -57,6 +57,32 @@ except Exception as e:
 
 # SentenceTransformer 모델 로드
 embedding_model = SentenceTransformer("bespin-global/klue-sroberta-base-continue-learning-by-mnr")
+
+def gstreamer_pipeline(
+    sensor_id=0,
+    capture_width=1920,
+    capture_height=1080,
+    display_width=1920,
+    display_height=1080,
+    framerate=30,
+    flip_method=0,
+):
+    return (
+        "nvarguscamerasrc sensor-id=%d ! "
+        "video/x-raw(memory:NVMM), width=(int)%d, height=(int)%d, framerate=(fraction)%d/1 ! "
+        "nvvidconv flip-method=%d ! "
+        "video/x-raw, width=(int)%d, height=(int)%d, format=(string)BGRx ! "
+        "videoconvert ! video/x-raw, format=(string)BGR ! appsink"
+        % (
+            sensor_id,
+            capture_width,
+            capture_height,
+            framerate,
+            flip_method,
+            display_width,
+            display_height,
+        )
+    )
 
 # 사용자 정보 저장 함수
 def save_user(username):
@@ -259,7 +285,7 @@ wake_word = '안녕'
 groq_client = Groq(api_key=groq_api_key)
 genai.configure(api_key=gemini_api_key)
 openai_client = OpenAI(api_key=openai_api_key)
-web_cam = cv2.VideoCapture(0)
+web_cam = cv2.VideoCapture(gstreamer_pipeline(flip_method=0), cv2.CAP_GSTREAMER)
 
 num_cores = os.cpu_count()
 whisper_size = 'base'
