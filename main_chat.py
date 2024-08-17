@@ -22,7 +22,11 @@ from faster_whisper import WhisperModel
 import speech_recognition as sr
 
 temp = 25
-gas = 30
+gas = 0 # gas 감지하면 1
+light = 1 # 빛을 받으면 1 
+previous_light = light
+previous_gas = gas
+temp_warning_given = False
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -83,6 +87,99 @@ def gstreamer_pipeline(
             display_height,
         )
     )
+
+# 조도 센서의 값을 지속적으로 모니터링하는 함수
+def monitor_light():
+    global light
+    global previous_light
+    global convo
+
+    while True:
+        # 현재 light 값을 계속 모니터링
+        if previous_light == 1 and light == 0:
+            response = "불을 끄셨네요 주무시나요?"
+            convo.append({'role': 'assistant', 'content': response})
+            print(f'ASSISTANT: {response}')
+            speak(response)
+        
+        # 현재 값을 이전 값으로 업데이트
+        previous_light = light
+        
+        # 잠시 대기 (이 시간을 조정하여 센서 데이터를 읽는 주기를 설정할 수 있음)
+        time.sleep(1)
+
+def monitor_gas():
+    global gas
+    global previous_gas
+    global convo
+
+    while True:
+        # 현재 gas 값을 계속 모니터링
+        if previous_gas == 0 and gas == 1:
+            response = "방 안에 일산화탄소 농도가 높은 것 같아요. 방 안에 창문을 열어 환기를 시키면 좋을 것 같아요"
+            convo.append({'role': 'assistant', 'content': response})
+            print(f'ASSISTANT: {response}')
+            speak(response)
+        
+        # 현재 값을 이전 값으로 업데이트
+        previous_gas = gas
+        
+        # 잠시 대기 (이 시간을 조정하여 센서 데이터를 읽는 주기를 설정할 수 있음)
+        time.sleep(1)
+
+def reset_temp_warning():
+    global temp_warning_given
+    temp_warning_given = False
+    print("temp_warning_given이 다시 False로 설정되었습니다.")
+
+def delayed_temp_warning():
+    global temp
+    global convo
+
+    response = f"현재 실내온도가 {temp}도에요, 더우시지 않으세요? 선풍기를 틀어드릴까요?"
+    convo.append({'role': 'assistant', 'content': response})
+    print(f'ASSISTANT: {response}')
+    speak(response)
+
+    # 1시간 뒤에 temp_warning_given 플래그를 False로 재설정하는 타이머 시작
+    threading.Timer(3600, reset_temp_warning).start()
+
+# 온도를 지속적으로 모니터링하는 함수
+def monitor_temp():
+    global temp
+    global temp_warning_given
+
+    while True:
+        # 온도가 26도 이상이면서 아직 경고 메시지가 출력되지 않은 경우
+        if temp >= 26 and not temp_warning_given:
+            temp_warning_given = True  # 플래그를 즉시 설정하여 중복 메시지 방지
+            # 30초 후에 경고 메시지를 출력하는 타이머 시작
+            threading.Timer(30, delayed_temp_warning).start()
+
+        # 잠시 대기 (온도 체크 주기)
+        time.sleep(1)
+
+def check_temperature():
+    global temp
+    return f"지금 실내 온도는 {temp}도입니다."
+
+# def change_light():
+#     global light
+#     time.sleep(10)
+#     light = 0
+#     print("Light가 0으로 변경되었습니다.")
+
+# def change_gas():
+#     global gas
+#     time.sleep(10)
+#     gas = 1
+#     print("gas가 1로 변경되었습니다.")
+
+# def change_temp():
+#     global temp
+#     time.sleep(10)
+#     temp = 30
+#     print("temp가 변경되었습니다.")
 
 # 사용자 정보 저장 함수
 def save_user(username):
@@ -291,8 +388,8 @@ num_cores = os.cpu_count()
 whisper_size = 'base'
 whisper_model = WhisperModel(
     whisper_size,
-    device='cpu',
-    compute_type='int8',
+    device='cuda',
+    compute_type='float16',
     cpu_threads=num_cores // 2,
     num_workers=num_cores // 2
 )
@@ -310,7 +407,7 @@ def speak(text):
     
     with openai_client.audio.speech.with_streaming_response.create(
         model='tts-1',
-        voice='alloy',
+        voice='nova',
         response_format='pcm',
         input=text,
     ) as response:
@@ -453,22 +550,6 @@ def generate_and_ask_question(user_id):
     
     return generated_question
 
-def set_alarm(alarm_time):
-    now = datetime.now()
-    alarm_time = datetime.combine(now.date(), alarm_time)
-    
-    if alarm_time < now:
-        alarm_time += timedelta(days=1)
-    
-    delay = (alarm_time - now).total_seconds()
-    t = threading.Timer(delay, trigger_alarm)
-    t.start()
-
-def trigger_alarm():
-    convo.append({'role': 'assistant', 'content': "약 드실 시간입니다!"})
-    print(f'ASSISTANT: 약 드실 시간입니다!')
-    speak("약 드실 시간입니다!")
-
 
 # 사용자 명령에 따라 웹 검색, 웹캡 캡처 등의 기능 호출 결정 함수
 def function_call(prompt):
@@ -539,6 +620,92 @@ def extract_text_from_url(url):
         return ' '.join(p.get_text() for p in paragraphs)
     return ''
 
+# 알람을 저장할 딕셔너리
+alarms = {}
+
+# 알람 ID를 생성하는 함수 (시간과 분을 기준으로 통일된 ID 생성)
+def generate_alarm_id(hour, minute, time_of_day=None):
+    if time_of_day in ["오후", "저녁"] and hour < 12:
+        hour += 12
+    elif time_of_day in ["오전", "아침"] and hour == 12:
+        hour = 0
+    return f"{hour:02}:{minute:02}"
+
+def parse_alarm_time_and_set(prompt):
+    time_pattern = r"(?:(오전|오후|아침|저녁)\s*)?(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분?)?"
+    match = re.search(time_pattern, prompt)
+
+    if not match:
+        return "시간을 정확히 '오후 3시' 또는 '오후 3시 30분' 형식으로 입력해 주세요."
+
+    time_of_day, hour, minute = match.groups()
+    hour = int(hour)
+    minute = int(minute) if minute else 0
+
+    # 알람 ID 생성
+    alarm_id = generate_alarm_id(hour, minute, time_of_day)
+
+    # 매일 반복 여부 확인
+    is_daily = "매일" in prompt
+
+    # 알람 시간을 설정
+    alarm_time = datetime.strptime(f"{hour:02}:{minute:02}:00", "%H:%M:%S").time()
+    set_alarm(alarm_id, alarm_time, is_daily)
+
+    response_message = f"알람을 {'매일 ' if is_daily else ''}{hour}시 {minute}분으로 설정했습니다."
+    return response_message
+
+# 알람 시간을 설정하는 함수
+def set_alarm(alarm_id, alarm_time, is_daily=False):
+    now = datetime.now()
+    alarm_time = datetime.combine(now.date(), alarm_time)
+
+    if alarm_time < now:
+        alarm_time += timedelta(days=1)
+
+    delay = (alarm_time - now).total_seconds()
+
+    if is_daily:
+        def repeat_alarm():
+            trigger_alarm(alarm_id)
+            set_alarm(alarm_id, alarm_time.time(), is_daily=True)
+
+        t = threading.Timer(delay, repeat_alarm)
+    else:
+        t = threading.Timer(delay, trigger_alarm, [alarm_id])
+
+    t.start()
+    alarms[alarm_id] = t
+
+# 알람 취소 함수
+def cancel_alarm(prompt):
+    time_pattern = r"(?:(오전|오후|아침|저녁)\s*)?(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분?)?"
+    match = re.search(time_pattern, prompt)
+
+    if not match:
+        return "취소할 알람 시간을 정확히 '오후 3시' 또는 '오후 3시 30분' 형식으로 입력해 주세요."
+
+    time_of_day, hour, minute = match.groups()
+    hour = int(hour)
+    minute = int(minute) if minute else 0
+
+    alarm_id = generate_alarm_id(hour, minute, time_of_day)
+
+    if alarm_id in alarms:
+        alarms[alarm_id].cancel()
+        del alarms[alarm_id]
+        return f"{hour}시 {minute}분 알람을 취소했습니다."
+    else:
+        return f"{hour}시 {minute}분에 설정된 알람이 없습니다."
+
+def trigger_alarm(alarm_id):
+    convo.append({'role': 'assistant', 'content': f"약 드실 시간이에요! ({alarm_id})"})
+    print(f'ASSISTANT: 약 드실 시간이에요!({alarm_id})')
+    speak("약 드실 시간이에요!")
+
+    if alarm_id in alarms:
+        del alarms[alarm_id]
+
 chatbot_speaking = False  
 
 # 사용자가 질문을 입력하고 대답을 처리하는 메인 함수
@@ -547,19 +714,26 @@ def callback(recognizer, audio):
     global user_question_count
     global last_interaction_time
     global chatbot_speaking
-    username = "User3"  # 사용자 이름을 설정
+    
+    response = None  # response 초기화
+    username = "User3"  # 사용자 이름 설정
     save_user(username)  # 사용자 저장
     user_id = get_user_id(username)  # 사용자 ID 가져오기
 
     # 초기 대화 기록을 불러옵니다.
     if user_id:
         convo.extend(load_initial_conversation_history(user_id))
-
-    # 나머지 대화 기록은 임베딩된 데이터로 불러옵니다.
-    all_embeddings = load_conversation_embeddings(user_id) if user_id else []
+        all_embeddings = load_conversation_embeddings(user_id)
+    else:
+        all_embeddings = []
 
     reset_timer()
     threading.Thread(target=check_inactivity, args=(user_id,), daemon=True).start()
+
+    # 센서 모니터링 스레드 실행
+    threading.Thread(target=monitor_light, daemon=True).start()
+    threading.Thread(target=monitor_gas, daemon=True).start()
+    threading.Thread(target=monitor_temp, daemon=True).start()
 
     prompt_audio_path = 'prompt.wav'
     with open(prompt_audio_path, 'wb') as f:
@@ -570,64 +744,63 @@ def callback(recognizer, audio):
 
     if clean_prompt:
         # "잠깐"이라는 말이 있을 경우 챗봇의 말을 중단하고 응답
-        if '잠깐' or '잠깐만' in clean_prompt.lower():
-            print("ASSISTANT: 무슨 문제있으신가요?")
-            convo.append({'role': 'assistant', 'content': "무슨 문제있으신가요?"})
-            chatbot_speaking = False  # 챗봇의 말을 중단
-            return
-
-        reset_timer()
-        user_question_count += 1
-        chatbot_speaking = True
-        
-        print(f'USER: {clean_prompt}')
-        convo.append({'role': 'user', 'content': clean_prompt})
-
-        relevant_conversation_ids = load_relevant_conversation_embeddings(clean_prompt, all_embeddings) if all_embeddings else []
-        convo.extend(load_conversation_texts(relevant_conversation_ids))
-
-        if len(convo) > 20:
-            convo = convo[-20:]
-
-        question_type = check_date_or_weather_question(clean_prompt)
-        if question_type == 'date':
-            response = get_current_date()
-        elif question_type == 'weather':
-            response = get_weather()
+        if '잠깐' in clean_prompt.lower():
+            response = "무슨 문제 있으신가요?"
         else:
-            call = function_call(clean_prompt)
-            
-            if 'capture webcam' in call:
-                print('Capturing webcam')
-                web_cam_capture()
-                visual_context = vision_prompt(prompt=clean_prompt, photo_path='webcam_capture.jpg')
+            reset_timer()
+            user_question_count += 1
+            chatbot_speaking = True
+
+            print(f'USER: {clean_prompt}')
+            convo.append({'role': 'user', 'content': clean_prompt})
+
+            # 유사한 대화 기록 불러오기
+            if all_embeddings:
+                relevant_conversation_ids = load_relevant_conversation_embeddings(clean_prompt, all_embeddings)
+                convo.extend(load_conversation_texts(relevant_conversation_ids))
+
+            if len(convo) > 20:
+                convo = convo[-20:]
+
+            # 알람, 온도, 날짜, 날씨 처리
+            if "알람 맞춰줘" in clean_prompt or "알람 설정해줘" in clean_prompt:
+                response = parse_alarm_time_and_set(clean_prompt)
+            elif "알람 취소해줘" in clean_prompt:
+                response = cancel_alarm(clean_prompt)
+            elif "현재 온도" in clean_prompt:
+                response = check_temperature()
             else:
-                visual_context = None
-            
-            if '검색' in clean_prompt or '찾아' in clean_prompt:
-                if 'perform web search' in call:
-                    search_link = search_google(clean_prompt)
-                    content_text = ''
-                    if search_link:
-                        print(f'Search link: {search_link}')
-                        content_text = extract_text_from_url(search_link)
-                    response = groq_prompt(prompt=clean_prompt, img_context=visual_context + '\n\n' + content_text if visual_context else content_text)
+                question_type = check_date_or_weather_question(clean_prompt)
+                if question_type == 'date':
+                    response = get_current_date()
+                elif question_type == 'weather':
+                    response = get_weather()
                 else:
-                    response = groq_prompt(prompt=clean_prompt, img_context=visual_context)
-            else:
-                response = groq_prompt(prompt=clean_prompt, img_context=visual_context)
+                    # 기타 명령어 처리
+                    call = function_call(clean_prompt)
+                    visual_context = None
+                    if 'capture webcam' in call:
+                        web_cam_capture()
+                        visual_context = vision_prompt(prompt=clean_prompt, photo_path='webcam_capture.jpg')
+
+                    if 'perform web search' in call and ('검색' in clean_prompt or '찾아' in clean_prompt):
+                        search_link = search_google(clean_prompt)
+                        content_text = extract_text_from_url(search_link) if search_link else ''
+                        response = groq_prompt(prompt=clean_prompt, img_context=visual_context + '\n\n' + content_text if visual_context else content_text)
+                    else:
+                        response = groq_prompt(prompt=clean_prompt, img_context=visual_context)
 
         if response:
             convo.append({'role': 'assistant', 'content': response})
             print(f'ASSISTANT: {response}')
             speak(response)
-            chatbot_speaking = False  # 챗봇이 응답을 마친 후 대기 상태로 설정
+            chatbot_speaking = False
             if user_id:
                 save_conversation(user_id, clean_prompt, response)
 
         if user_question_count >= 5:
             generate_and_ask_question(user_id)
-            user_question_count = 0  # 카운트 초기화
+            user_question_count = 0
 
         if len(convo) > 20:
             convo = convo[-20:]
@@ -652,8 +825,5 @@ def extract_prompt(transcribed_text, wake_word):
         return prompt
     else:
         return None
-
-alarm_time = datetime.strptime("20:10:00", "%H:%M:%S").time()
-set_alarm(alarm_time)
 
 start_listening()
