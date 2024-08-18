@@ -383,7 +383,7 @@ wake_word = '헤티'
 groq_client = Groq(api_key=groq_api_key)
 genai.configure(api_key=gemini_api_key)
 openai_client = OpenAI(api_key=openai_api_key)
-web_cam = cv2.VideoCapture(gstreamer_pipeline(flip_method=0), cv2.CAP_GSTREAMER)
+cam = cv2.VideoCapture(gstreamer_pipeline(flip_method=0), cv2.CAP_GSTREAMER)
 
 num_cores = os.cpu_count()
 whisper_size = 'tiny'
@@ -571,16 +571,16 @@ def function_call(prompt):
     return response.content
 
 # 웹캠으로 사진 캡처 함수
-def web_cam_capture(filename="capture.jpg"):
-    if web_cam.isOpened():
-        ret_val, frame = web_cam.read()  # 한 프레임 캡처
+def cam_capture(filename="capture.jpg"):
+    if cam.isOpened():
+        ret_val, frame = cam.read()  # 한 프레임 캡처
         if ret_val:
             # 이미지를 파일로 저장
             cv2.imwrite(filename, frame)
             print(f"Image saved: {filename}")
         else:
             print("Error: Failed to capture image")
-        web_cam.release()  # 카메라 리소스 해제
+        cam.release()  # 카메라 리소스 해제
     else:
         print("Error: Unable to open camera")
         
@@ -781,7 +781,7 @@ def callback(recognizer, audio):
                     call = function_call(clean_prompt)
                     visual_context = None
                     if 'capture webcam' in call:
-                        web_cam_capture()
+                        cam_capture()
                         visual_context = vision_prompt(prompt=clean_prompt, photo_path='webcam_capture.jpg')
 
                     if 'perform web search' in call and ('검색' in clean_prompt or '찾아' in clean_prompt):
