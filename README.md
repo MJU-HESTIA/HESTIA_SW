@@ -11,11 +11,13 @@
 
   cd HESTIA_SW
 
-  conda create -n hestia python=3.11
+  conda create -n hestia python=3.11.6 opencv=4.9.0 cuda=12.2
 
   conda activate hestia
 
   python -m pip install --upgrade pip
+
+  cd HESTIA_SW
 
   pip install -r requirements.txt
 
