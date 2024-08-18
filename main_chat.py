@@ -411,6 +411,8 @@ def check_date_or_weather_question(prompt):
             return 'weather'
     return None
 
+# Local model for text generation
+
 
 # Groq API를 통한 대화 응답 생성 함수
 def groq_prompt(prompt, img_context):
