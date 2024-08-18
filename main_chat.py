@@ -19,6 +19,8 @@ import re
 from io import BytesIO
 import tkinter as tk
 from tkinter import ttk, messagebox
+import queue
+import pyaudio
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -100,6 +102,7 @@ def monitor_light():
             response = "불을 끄셨네요 주무시나요?"
             convo.append({'role': 'assistant', 'content': response})
             print(f'ASSISTANT: {response}')
+            speak_async(response)
         
         # 현재 값을 이전 값으로 업데이트
         previous_light = light
@@ -118,6 +121,7 @@ def monitor_gas():
             response = "방 안에 일산화탄소 농도가 높은 것 같아요. 방 안에 창문을 열어 환기를 시키면 좋을 것 같아요"
             convo.append({'role': 'assistant', 'content': response})
             print(f'ASSISTANT: {response}')
+            speak_async(response)
         
         # 현재 값을 이전 값으로 업데이트
         previous_gas = gas
@@ -137,6 +141,7 @@ def delayed_temp_warning():
     response = f"현재 실내온도가 {temp}도에요, 더우시지 않으세요? 선풍기를 틀어드릴까요?"
     convo.append({'role': 'assistant', 'content': response})
     print(f'ASSISTANT: {response}')
+    speak_async(response)
 
     # 1시간 뒤에 temp_warning_given 플래그를 False로 재설정하는 타이머 시작
     threading.Timer(3600, reset_temp_warning).start()
@@ -381,6 +386,30 @@ groq_client = Groq(api_key=groq_api_key)
 genai.configure(api_key=gemini_api_key)
 openai_client = OpenAI(api_key=openai_api_key)
 
+def speak(text):
+    player_stream = pyaudio.PyAudio().open(format=pyaudio.paInt16, channels=1, rate=24000, output=True, frames_per_buffer=1024)
+    stream_start = False
+    
+    with openai_client.audio.speech.with_streaming_response.create(
+        model='tts-1',
+        voice='nova',
+        response_format='pcm',
+        input=text,
+    ) as response:
+        silence_threshold = 0.01
+        for chunk in response.iter_bytes(chunk_size=1024):
+            if stream_start:
+                player_stream.write(chunk)
+            else:
+                if max(chunk) > silence_threshold:
+                    player_stream.write(chunk)
+                    stream_start = True
+                    
+def speak_async(text):
+    # speak 함수를 별도의 스레드에서 실행
+    speak_thread = threading.Thread(target=speak, args=(text,))
+    speak_thread.start()
+
 # 날짜를 얻는 함수
 def get_current_date():
     now = datetime.now()
@@ -428,51 +457,23 @@ def groq_prompt(prompt, img_context):
 last_interaction_time = None
 user_question_count = 0
 
-# 이미지 생성 함수
-def generate_image(prompt, img_label, status_label, progress):
+# 메인 스레드에서 실행할 작업을 저장하는 큐
+task_queue = queue.Queue()
+
+# 메인 루프에서 주기적으로 큐를 확인하고 작업을 처리하는 함수
+def process_queue():
     try:
-        # 상태 업데이트 및 로딩 애니메이션 시작
-        progress.start()
+        while True:
+            task = task_queue.get_nowait()
+            task()  # 큐에서 가져온 작업을 실행
+    except queue.Empty:
+        pass
+    root.after(100, process_queue)  # 주기적으로 큐를 확인
 
-        # OpenAI API 호출
-        response = openai_client.images.generate(
-            model="dall-e-3",         # 사용할 모델
-            prompt=prompt,            # 프롬프트 입력
-            size="1024x1024",         # 이미지 크기
-            quality="standard",       # 이미지 품질
-            n=1                       # 생성할 이미지 수
-        )
+# tkinter GUI 설정 (한 번만 호출)
+def create_gui():
+    global root, img_label, status_label, progress
 
-        # 생성된 이미지 URL 가져오기
-        image_url = response.data[0].url
-
-        # 이미지 다운로드
-        image_response = requests.get(image_url)
-        img_data = Image.open(BytesIO(image_response.content))
-
-        # 이미지 크기 조정 및 tkinter용으로 변환
-        img_data.thumbnail((800, 800))  # 이미지 크기 조정
-        img_tk = ImageTk.PhotoImage(img_data)
-
-        # 이미지 레이블에 이미지 표시
-        img_label.config(image=img_tk)
-        img_label.image = img_tk  # 참조 유지
-
-        # 이미지를 파일로 저장
-        img_data.save("generated_image.png")
-    except Exception as e:
-        messagebox.showerror("Error", f"Failed to generate image: {e}")
-        status_label.config(text="Failed to generate image.")
-    finally:
-        # 로딩 애니메이션 중지
-        progress.stop()
-
-# 프롬프트로부터 이미지를 생성하는 스레드 함수
-def start_image_generation(prompt, img_label, status_label, progress):
-    threading.Thread(target=generate_image, args=(prompt, img_label, status_label, progress)).start()
-
-# tkinter GUI 설정
-def create_gui(prompt):
     # 메인 윈도우 설정
     root = tk.Tk()
     root.title("DALL·E 3 Image Generator")
@@ -494,15 +495,77 @@ def create_gui(prompt):
     progress = ttk.Progressbar(frame, orient="horizontal", mode="indeterminate")
     progress.pack(pady=10)
 
-    # 바로 이미지 생성 시작
-    start_image_generation(prompt, img_label, status_label, progress)
-
     # 닫기 버튼
     close_button = tk.Button(frame, text="Close", font=("Arial", 16), command=root.quit)
     close_button.pack(pady=10)
 
+    # 초기 이미지 표시
+    show_start_image()
+
+    # 큐 처리 시작
+    process_queue()
+
     # 메인 루프 실행
     root.mainloop()
+
+# 초기 이미지 표시 함수
+def show_start_image():
+    try:
+        start_image_path = "start_image.jpg"
+        img_data = Image.open(start_image_path)
+        img_data.thumbnail((800, 800))  # 이미지 크기 조정
+        img_tk = ImageTk.PhotoImage(img_data)
+
+        # GUI 업데이트 작업을 큐에 추가
+        task_queue.put(lambda: update_gui(img_tk, None))
+    except Exception as e:
+        task_queue.put(lambda: update_gui(None, f"Failed to display start image: {e}"))
+
+# GUI 업데이트 함수 (메인 스레드에서 실행)
+def update_gui(img_tk, status_message=None):
+    global img_label  # 혹시라도 img_label이 로컬 스코프에서 정의되는 것을 방지
+    if img_tk:
+        img_label.config(image=img_tk)
+        img_label.image = img_tk  # 참조 유지
+    status_label.config(text=status_message)
+    progress.stop()
+
+# 이미지 생성 함수 (스레드 내에서 실행)
+def generate_image(prompt):
+    try:
+        # OpenAI API 호출
+        response = openai_client.images.generate(
+            model="dall-e-3",         # 사용할 모델
+            prompt=prompt,            # 프롬프트 입력
+            size="1024x1024",         # 이미지 크기
+            quality="standard",       # 이미지 품질
+            n=1                       # 생성할 이미지 수
+        )
+
+        # 생성된 이미지 URL 가져오기
+        image_url = response.data[0].url
+
+        # 이미지 다운로드
+        image_response = requests.get(image_url)
+        img_data = Image.open(BytesIO(image_response.content))
+
+        # 이미지 크기 조정
+        img_data.thumbnail((800, 800))  # 이미지 크기 조정
+
+        # tkinter 이미지 변환
+        img_tk = ImageTk.PhotoImage(img_data)
+
+        # GUI 업데이트 작업을 큐에 추가
+        task_queue.put(lambda: update_gui(img_tk, None))
+        img_data.save("generated_image.png")
+    except Exception as e:
+        task_queue.put(lambda: update_gui(None, f"Failed to generate image: {str(e)}"))
+
+# 프롬프트로부터 이미지를 생성하고 업데이트하는 스레드 함수
+def start_image_generation(prompt):
+    # progress.start() 작업을 큐에 추가하여 메인 스레드에서 실행
+    task_queue.put(progress.start)
+    threading.Thread(target=generate_image, args=(prompt,)).start()
 
 def reset_timer():
     global last_interaction_time
@@ -534,6 +597,7 @@ def check_inactivity(user_id):
             if time_since_last_interaction > 300:  # 5분(300초) 동안 사용자가 반응하지 않은 경우
                 user_state = check_user_state_with_webcam()  # 웹캠을 사용하여 사용자의 상태를 확인합니다.
                 print(f'ASSISTANT: {user_state}')
+                speak_async(user_state)
                 convo.append({'role': 'assistant', 'content': user_state})
                 reset_timer()
 
@@ -577,6 +641,7 @@ def generate_and_ask_question(user_id):
     # 생성된 질문을 대화에 추가하고 출력
     convo.append({'role': 'assistant', 'content': generated_question})
     print(f'ASSISTANT: {generated_question}')
+    speak_async(generated_question)
 
     if user_id:
         save_conversation(user_id, " ".join([msg for msg, resp in conversations]), generated_question)
@@ -732,6 +797,7 @@ def cancel_alarm(prompt):
 def trigger_alarm(alarm_id):
     convo.append({'role': 'assistant', 'content': f"약 드실 시간이에요! ({alarm_id})"})
     print(f'ASSISTANT: 약 드실 시간이에요!({alarm_id})')
+    speak_async(f"약 드실 시간이에요!")
 
     if alarm_id in alarms:
         del alarms[alarm_id]
@@ -755,6 +821,12 @@ def handle_input():
     # 나머지 대화 기록은 임베딩된 데이터로 불러옵니다.
     all_embeddings = load_conversation_embeddings(user_id) if user_id else []
 
+    # 챗봇이 첫 번째 메시지를 사용자에게 보냅니다.
+    initial_message = "안녕하세요 헤스티아입니다"
+    convo.append({'role': 'assistant', 'content': initial_message})
+    print(f'ASSISTANT: {initial_message}')
+    speak_async(initial_message)
+
     reset_timer()
     threading.Thread(target=check_inactivity, args=(user_id,), daemon=True).start()
 
@@ -767,11 +839,15 @@ def handle_input():
     # threading.Thread(target=change_gas, daemon=True).start()
     # threading.Thread(target=change_temp, daemon=True).start()
 
+    # tkinter GUI 설정을 한 번만 호출
+    threading.Thread(target=create_gui).start()
+
     while True:
         user_input = input(f"Say '{wake_word}': ").strip()
 
         if '잠깐' in user_input.lower():
             print("ASSISTANT: 무슨 문제있으신가요?")
+            speak_async("무슨 문제있으신가요?")
             convo.append({'role': 'assistant', 'content': "무슨 문제있으신가요?"})
             chatbot_speaking = False  # 챗봇의 말을 중단
             continue
@@ -791,6 +867,7 @@ def handle_input():
                 response = "안녕하세요! 무엇을 도와드릴까요?"
                 convo.append({'role': 'assistant', 'content': response})
                 print(f'ASSISTANT: {response}')
+                speak_async(response)
                 chatbot_speaking = False
                 continue
             
@@ -841,7 +918,8 @@ def handle_input():
             if response:
                 convo.append({'role': 'assistant', 'content': response})
                 print(f'ASSISTANT: {response}')
-                threading.Thread(target=create_gui, args=(response,)).start()
+                speak_async(response)
+                threading.Thread(target=start_image_generation, args=(response,)).start()
                 chatbot_speaking = False  # 챗봇이 응답을 마친 후 대기 상태로 설정
                 if user_id:
                     save_conversation(user_id, clean_prompt, response)
