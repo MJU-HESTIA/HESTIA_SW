@@ -7,6 +7,7 @@ google-generativeai==0.5.4
 
 #pip install git+https://github.com/opencv/opencv-python.git@6a181ce
 #opencv-python==4.10.0+6a181ce
+opencv-python==4.9.0.80
 requests==2.32.3
 beautifulsoup4==4.12.3
 python-dotenv==1.0.1

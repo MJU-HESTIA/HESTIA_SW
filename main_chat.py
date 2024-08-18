@@ -66,8 +66,8 @@ def gstreamer_pipeline(
     sensor_id=0,
     capture_width=1920,
     capture_height=1080,
-    display_width=1920,
-    display_height=1080,
+    display_width=960,
+    display_height=540,
     framerate=30,
     flip_method=0,
 ):
@@ -76,7 +76,8 @@ def gstreamer_pipeline(
         "video/x-raw(memory:NVMM), width=(int)%d, height=(int)%d, framerate=(fraction)%d/1 ! "
         "nvvidconv flip-method=%d ! "
         "video/x-raw, width=(int)%d, height=(int)%d, format=(string)BGRx ! "
-        "videoconvert ! video/x-raw, format=(string)BGR ! appsink"
+        "videoconvert ! "
+        "video/x-raw, format=(string)BGR ! appsink"
         % (
             sensor_id,
             capture_width,
@@ -376,7 +377,7 @@ model = genai.GenerativeModel('gemini-1.5-flash-latest',
                               safety_settings=safety_settings)
 
 # wake_word 설정
-wake_word = '안녕'
+wake_word = '헤티'
 
 # API 클라이언트 및 웹캠 초기화
 groq_client = Groq(api_key=groq_api_key)
@@ -385,11 +386,11 @@ openai_client = OpenAI(api_key=openai_api_key)
 web_cam = cv2.VideoCapture(gstreamer_pipeline(flip_method=0), cv2.CAP_GSTREAMER)
 
 num_cores = os.cpu_count()
-whisper_size = 'base'
+whisper_size = 'tiny'
 whisper_model = WhisperModel(
     whisper_size,
-    device='cuda',
-    compute_type='float16',
+    device='cpu',
+    compute_type='int8',
     cpu_threads=num_cores // 2,
     num_workers=num_cores // 2
 )
@@ -402,7 +403,7 @@ r.language = 'ko-KR'
 source = sr.Microphone()
 
 def speak(text):
-    player_stream = pyaudio.PyAudio().open(format=pyaudio.paInt16, channels=1, rate=24000, output=True)
+    player_stream = pyaudio.PyAudio().open(format=pyaudio.paInt16, channels=1, rate=44100, output=True, frames_per_buffer=1024)
     stream_start = False
     
     with openai_client.audio.speech.with_streaming_response.create(
@@ -570,19 +571,19 @@ def function_call(prompt):
     return response.content
 
 # 웹캠으로 사진 캡처 함수
-def web_cam_capture():
-    if not web_cam.isOpened():
-        print("Cannot open camera")
-        speak("Cannot open camera")
-        exit()
-        
-    path = 'webcam_capture.jpg'
-    ret, frame = web_cam.read()
-    if ret:
-        cv2.imwrite(path, frame)
+def web_cam_capture(filename="capture.jpg"):
+    if web_cam.isOpened():
+        ret_val, frame = web_cam.read()  # 한 프레임 캡처
+        if ret_val:
+            # 이미지를 파일로 저장
+            cv2.imwrite(filename, frame)
+            print(f"Image saved: {filename}")
+        else:
+            print("Error: Failed to capture image")
+        web_cam.release()  # 카메라 리소스 해제
     else:
-        print("Failed to capture image")
-        speak("Failed to capture image")
+        print("Error: Unable to open camera")
+        
 
 # 이미지 파일로부터 텍스트를 생성하는 함수
 def vision_prompt(prompt, photo_path):
@@ -716,7 +717,7 @@ def callback(recognizer, audio):
     global chatbot_speaking
     
     response = None  # response 초기화
-    username = "User3"  # 사용자 이름 설정
+    username = "Seung Seok Lee"  # 사용자 이름 설정
     save_user(username)  # 사용자 저장
     user_id = get_user_id(username)  # 사용자 ID 가져오기
 
