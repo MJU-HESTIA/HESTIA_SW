@@ -1,6 +1,6 @@
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModel
-from PIL import Image,ImageGrab
+from PIL import Image, ImageTk
 from openai import OpenAI
 import google.generativeai as genai
 import cv2
@@ -16,17 +16,9 @@ import threading
 from datetime import datetime, timedelta
 import time
 import re
-# import pyperclip
-import pyaudio
-from faster_whisper import WhisperModel
-import speech_recognition as sr
-
-temp = 25
-gas = 0 # gas 감지하면 1
-light = 1 # 빛을 받으면 1 
-previous_light = light
-previous_gas = gas
-temp_warning_given = False
+from io import BytesIO
+import tkinter as tk
+from tkinter import ttk, messagebox
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -61,6 +53,13 @@ except Exception as e:
 
 # SentenceTransformer 모델 로드
 embedding_model = SentenceTransformer("bespin-global/klue-sroberta-base-continue-learning-by-mnr")
+
+temp = 25
+gas = 0 # gas 감지하면 1
+light = 1 # 빛을 받으면 1 
+previous_light = light
+previous_gas = gas
+temp_warning_given = False
 
 def gstreamer_pipeline(
     sensor_id=0,
@@ -101,7 +100,6 @@ def monitor_light():
             response = "불을 끄셨네요 주무시나요?"
             convo.append({'role': 'assistant', 'content': response})
             print(f'ASSISTANT: {response}')
-            speak(response)
         
         # 현재 값을 이전 값으로 업데이트
         previous_light = light
@@ -120,7 +118,6 @@ def monitor_gas():
             response = "방 안에 일산화탄소 농도가 높은 것 같아요. 방 안에 창문을 열어 환기를 시키면 좋을 것 같아요"
             convo.append({'role': 'assistant', 'content': response})
             print(f'ASSISTANT: {response}')
-            speak(response)
         
         # 현재 값을 이전 값으로 업데이트
         previous_gas = gas
@@ -140,7 +137,6 @@ def delayed_temp_warning():
     response = f"현재 실내온도가 {temp}도에요, 더우시지 않으세요? 선풍기를 틀어드릴까요?"
     convo.append({'role': 'assistant', 'content': response})
     print(f'ASSISTANT: {response}')
-    speak(response)
 
     # 1시간 뒤에 temp_warning_given 플래그를 False로 재설정하는 타이머 시작
     threading.Timer(3600, reset_temp_warning).start()
@@ -377,54 +373,12 @@ model = genai.GenerativeModel('gemini-1.5-flash-latest',
                               safety_settings=safety_settings)
 
 # wake_word 설정
-wake_word = '헤티'
+wake_word = '안녕'
 
 # API 클라이언트 및 웹캠 초기화
 groq_client = Groq(api_key=groq_api_key)
 genai.configure(api_key=gemini_api_key)
 openai_client = OpenAI(api_key=openai_api_key)
-cam = cv2.VideoCapture(gstreamer_pipeline(flip_method=0), cv2.CAP_GSTREAMER)
-
-num_cores = os.cpu_count()
-whisper_size = 'tiny'
-whisper_model = WhisperModel(
-    whisper_size,
-    device='cpu',
-    compute_type='int8',
-    cpu_threads=num_cores // 2,
-    num_workers=num_cores // 2
-)
-
-r = sr.Recognizer()
-r.energy_threshold = 300
-r.dynamic_energy_threshold = False
-r.pause_threshold = 0.8
-r.language = 'ko-KR'
-source = sr.Microphone()
-
-def speak(text):
-    player_stream = pyaudio.PyAudio().open(format=pyaudio.paInt16, channels=1, rate=44100, output=True, frames_per_buffer=1024)
-    stream_start = False
-    
-    with openai_client.audio.speech.with_streaming_response.create(
-        model='tts-1',
-        voice='nova',
-        response_format='pcm',
-        input=text,
-    ) as response:
-        silence_threshold = 0.01
-        for chunk in response.iter_bytes(chunk_size=1024):
-            if stream_start:
-                player_stream.write(chunk)
-            else:
-                if max(chunk) > silence_threshold:
-                    player_stream.write(chunk)
-                    stream_start = True
-
-def wav_to_text(audio_path):
-    segments, _ = whisper_model.transcribe(audio_path)
-    text = ''. join(segment.text for segment in segments)
-    return text
 
 # 날짜를 얻는 함수
 def get_current_date():
@@ -471,10 +425,87 @@ def groq_prompt(prompt, img_context):
 last_interaction_time = None
 user_question_count = 0
 
+# 이미지 생성 함수
+def generate_image(prompt, img_label, status_label, progress):
+    try:
+        # 상태 업데이트 및 로딩 애니메이션 시작
+        progress.start()
+
+        # OpenAI API 호출
+        response = openai_client.images.generate(
+            model="dall-e-3",         # 사용할 모델
+            prompt=prompt,            # 프롬프트 입력
+            size="1024x1024",         # 이미지 크기
+            quality="standard",       # 이미지 품질
+            n=1                       # 생성할 이미지 수
+        )
+
+        # 생성된 이미지 URL 가져오기
+        image_url = response.data[0].url
+
+        # 이미지 다운로드
+        image_response = requests.get(image_url)
+        img_data = Image.open(BytesIO(image_response.content))
+
+        # 이미지 크기 조정 및 tkinter용으로 변환
+        img_data.thumbnail((800, 800))  # 이미지 크기 조정
+        img_tk = ImageTk.PhotoImage(img_data)
+
+        # 이미지 레이블에 이미지 표시
+        img_label.config(image=img_tk)
+        img_label.image = img_tk  # 참조 유지
+
+        # 이미지를 파일로 저장
+        img_data.save("generated_image.png")
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to generate image: {e}")
+        status_label.config(text="Failed to generate image.")
+    finally:
+        # 로딩 애니메이션 중지
+        progress.stop()
+
+# 프롬프트로부터 이미지를 생성하는 스레드 함수
+def start_image_generation(prompt, img_label, status_label, progress):
+    threading.Thread(target=generate_image, args=(prompt, img_label, status_label, progress)).start()
+
+# tkinter GUI 설정
+def create_gui(prompt):
+    # 메인 윈도우 설정
+    root = tk.Tk()
+    root.title("DALL·E 3 Image Generator")
+    root.attributes('-fullscreen', True)  # 전체 화면 모드
+
+    # 레이아웃 설정
+    frame = tk.Frame(root)
+    frame.pack(expand=True, fill="both", padx=20, pady=20)
+
+    # 이미지 표시 레이블
+    img_label = tk.Label(frame)
+    img_label.pack(pady=20)
+
+    # 상태 표시 레이블
+    status_label = tk.Label(frame, text="", font=("Arial", 14))
+    status_label.pack(pady=10)
+
+    # 프로그레스 바 (로딩 애니메이션 대체)
+    progress = ttk.Progressbar(frame, orient="horizontal", mode="indeterminate")
+    progress.pack(pady=10)
+
+    # 바로 이미지 생성 시작
+    start_image_generation(prompt, img_label, status_label, progress)
+
+    # 닫기 버튼
+    close_button = tk.Button(frame, text="Close", font=("Arial", 16), command=root.quit)
+    close_button.pack(pady=10)
+
+    # 메인 루프 실행
+    root.mainloop()
+
 def reset_timer():
     global last_interaction_time
     last_interaction_time = datetime.now()
 
+# 웹캠 이미지를 바탕으로 상태를 확인하는 함수
 def check_user_state_with_webcam():
     # 웹캠에서 이미지를 캡처합니다.
     web_cam_capture()
@@ -500,7 +531,6 @@ def check_inactivity(user_id):
             if time_since_last_interaction > 300:  # 5분(300초) 동안 사용자가 반응하지 않은 경우
                 user_state = check_user_state_with_webcam()  # 웹캠을 사용하여 사용자의 상태를 확인합니다.
                 print(f'ASSISTANT: {user_state}')
-                speak(user_state)
                 convo.append({'role': 'assistant', 'content': user_state})
                 reset_timer()
 
@@ -531,26 +561,24 @@ def generate_and_ask_question(user_id):
     # 새로운 질문을 생성하기 위한 프롬프트
     messages.append({"role": "system", "content": "이전 대화를 참고하여 사용자에게 친근하게 질문을 시작해"})
 
-    # GPT-4o 모델을 사용하여 질문 생성
-    response = openai_client.chat.completions.create(
-        model="gpt-4o-2024-05-13",  # gpt-4o 모델 사용
-        messages=messages,
-        max_tokens=150,
-        temperature=0.7
+    # 이전 대화를 문자열로 변환
+    conversation_history = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+
+# 이미 정의된 Gemini 모델 객체를 사용하여 질문 생성
+    response = model.generate_content(
+        conversation_history + "\n사용자에게 친근하게 질문을 시작해"
     )
 
-    generated_question = response.choices[0].message.content.strip()
+    generated_question = response.text.strip()
 
     # 생성된 질문을 대화에 추가하고 출력
     convo.append({'role': 'assistant', 'content': generated_question})
     print(f'ASSISTANT: {generated_question}')
-    speak(generated_question)
 
     if user_id:
         save_conversation(user_id, " ".join([msg for msg, resp in conversations]), generated_question)
     
     return generated_question
-
 
 # 사용자 명령에 따라 웹 검색, 웹캡 캡처 등의 기능 호출 결정 함수
 def function_call(prompt):
@@ -571,19 +599,21 @@ def function_call(prompt):
     return response.content
 
 # 웹캠으로 사진 캡처 함수
-def cam_capture(filename="capture.jpg"):
-    if cam.isOpened():
-        ret_val, frame = cam.read()  # 한 프레임 캡처
+def web_cam_capture():
+
+    web_cam = cv2.VideoCapture(gstreamer_pipeline(flip_method=0), cv2.CAP_GSTREAMER)
+
+    if web_cam.isOpened():
+        ret_val, frame = web_cam.read()  # 한 프레임 캡처
         if ret_val:
             # 이미지를 파일로 저장
-            cv2.imwrite(filename, frame)
-            print(f"Image saved: {filename}")
+            cv2.imwrite("webcam_capture.jpg", frame)
+            print(f"Image saved: webcam_capture.jpg")
         else:
             print("Error: Failed to capture image")
-        cam.release()  # 카메라 리소스 해제
+        web_cam.release()  # 카메라 리소스 해제
     else:
         print("Error: Unable to open camera")
-        
 
 # 이미지 파일로부터 텍스트를 생성하는 함수
 def vision_prompt(prompt, photo_path):
@@ -598,9 +628,6 @@ def vision_prompt(prompt, photo_path):
     )
     response = model.generate_content([prompt, img])
     return response.text
-
-def ir_send():
-    print("보냈습니다.")
 
 # 구글 검색 함수
 def search_google(query):
@@ -702,7 +729,6 @@ def cancel_alarm(prompt):
 def trigger_alarm(alarm_id):
     convo.append({'role': 'assistant', 'content': f"약 드실 시간이에요! ({alarm_id})"})
     print(f'ASSISTANT: 약 드실 시간이에요!({alarm_id})')
-    speak("약 드실 시간이에요!")
 
     if alarm_id in alarms:
         del alarms[alarm_id]
@@ -710,60 +736,64 @@ def trigger_alarm(alarm_id):
 chatbot_speaking = False  
 
 # 사용자가 질문을 입력하고 대답을 처리하는 메인 함수
-def callback(recognizer, audio):
+def handle_input():
     global convo
     global user_question_count
     global last_interaction_time
     global chatbot_speaking
-    
-    response = None  # response 초기화
-    username = "Seung Seok Lee"  # 사용자 이름 설정
+    username = "User2"  # 사용자 이름을 설정
     save_user(username)  # 사용자 저장
     user_id = get_user_id(username)  # 사용자 ID 가져오기
 
     # 초기 대화 기록을 불러옵니다.
     if user_id:
         convo.extend(load_initial_conversation_history(user_id))
-        all_embeddings = load_conversation_embeddings(user_id)
-    else:
-        all_embeddings = []
+
+    # 나머지 대화 기록은 임베딩된 데이터로 불러옵니다.
+    all_embeddings = load_conversation_embeddings(user_id) if user_id else []
 
     reset_timer()
     threading.Thread(target=check_inactivity, args=(user_id,), daemon=True).start()
 
-    # 센서 모니터링 스레드 실행
+    # 조도 센서, 가스 센서, 온도 모니터링을 별도의 스레드에서 실행
     threading.Thread(target=monitor_light, daemon=True).start()
     threading.Thread(target=monitor_gas, daemon=True).start()
     threading.Thread(target=monitor_temp, daemon=True).start()
 
-    prompt_audio_path = 'prompt.wav'
-    with open(prompt_audio_path, 'wb') as f:
-        f.write(audio.get_wav_data())
-        
-    prompt_text = wav_to_text(prompt_audio_path)
-    clean_prompt = extract_prompt(prompt_text, wake_word)
+    # threading.Thread(target=change_light, daemon=True).start()
+    # threading.Thread(target=change_gas, daemon=True).start()
+    # threading.Thread(target=change_temp, daemon=True).start()
 
-    if clean_prompt:
-        # "잠깐"이라는 말이 있을 경우 챗봇의 말을 중단하고 응답
-        if '잠깐' in clean_prompt.lower():
-            response = "무슨 문제 있으신가요?"
-        else:
+    while True:
+        user_input = input(f"Say '{wake_word}': ").strip()
+
+        if '잠깐' in user_input.lower():
+            print("ASSISTANT: 무슨 문제있으신가요?")
+            convo.append({'role': 'assistant', 'content': "무슨 문제있으신가요?"})
+            chatbot_speaking = False  # 챗봇의 말을 중단
+            continue
+        
+        # 챗봇이 말을 하고 있을 때는 대화 중단을 체크
+        if chatbot_speaking:
+            continue  # 챗봇이 말을 마칠 때까지 다른 입력을 무시
+        
+        if user_input.lower().startswith(wake_word.lower()):
             reset_timer()
             user_question_count += 1
             chatbot_speaking = True
 
+            clean_prompt = user_input[len(wake_word):].strip()
+            
+            if not clean_prompt:
+                response = "안녕하세요! 무엇을 도와드릴까요?"
+                convo.append({'role': 'assistant', 'content': response})
+                print(f'ASSISTANT: {response}')
+                chatbot_speaking = False
+                continue
+            
             print(f'USER: {clean_prompt}')
             convo.append({'role': 'user', 'content': clean_prompt})
-
-            # 유사한 대화 기록 불러오기
-            if all_embeddings:
-                relevant_conversation_ids = load_relevant_conversation_embeddings(clean_prompt, all_embeddings)
-                convo.extend(load_conversation_texts(relevant_conversation_ids))
-
-            if len(convo) > 20:
-                convo = convo[-20:]
-
-            # 알람, 온도, 날짜, 날씨 처리
+            
             if "알람 맞춰줘" in clean_prompt or "알람 설정해줘" in clean_prompt:
                 response = parse_alarm_time_and_set(clean_prompt)
             elif "알람 취소해줘" in clean_prompt:
@@ -771,60 +801,57 @@ def callback(recognizer, audio):
             elif "현재 온도" in clean_prompt:
                 response = check_temperature()
             else:
+                relevant_conversation_ids = load_relevant_conversation_embeddings(clean_prompt, all_embeddings) if all_embeddings else []
+                convo.extend(load_conversation_texts(relevant_conversation_ids))
+
+                if len(convo) > 20:
+                    convo = convo[-20:]
+
                 question_type = check_date_or_weather_question(clean_prompt)
                 if question_type == 'date':
                     response = get_current_date()
                 elif question_type == 'weather':
                     response = get_weather()
                 else:
-                    # 기타 명령어 처리
                     call = function_call(clean_prompt)
-                    visual_context = None
+                    
                     if 'capture webcam' in call:
-                        cam_capture()
+                        print('Capturing webcam')
+                        web_cam_capture()
                         visual_context = vision_prompt(prompt=clean_prompt, photo_path='webcam_capture.jpg')
-
-                    if 'perform web search' in call and ('검색' in clean_prompt or '찾아' in clean_prompt):
-                        search_link = search_google(clean_prompt)
-                        content_text = extract_text_from_url(search_link) if search_link else ''
-                        response = groq_prompt(prompt=clean_prompt, img_context=visual_context + '\n\n' + content_text if visual_context else content_text)
+                    else:
+                        visual_context = None
+                    
+                    if '검색' in clean_prompt or '찾아' in clean_prompt:
+                        if 'perform web search' in call:
+                            search_link = search_google(clean_prompt)
+                            content_text = ''
+                            if search_link:
+                                print(f'Search link: {search_link}')
+                                content_text = extract_text_from_url(search_link)
+                            response = groq_prompt(prompt=clean_prompt, img_context=visual_context + '\n\n' + content_text if visual_context else content_text)
+                        else:
+                            response = groq_prompt(prompt=clean_prompt, img_context=visual_context)
                     else:
                         response = groq_prompt(prompt=clean_prompt, img_context=visual_context)
 
-        if response:
-            convo.append({'role': 'assistant', 'content': response})
-            print(f'ASSISTANT: {response}')
-            speak(response)
-            chatbot_speaking = False
-            if user_id:
-                save_conversation(user_id, clean_prompt, response)
+            if response:
+                convo.append({'role': 'assistant', 'content': response})
+                print(f'ASSISTANT: {response}')
+                threading.Thread(target=create_gui, args=(response,)).start()
+                chatbot_speaking = False  # 챗봇이 응답을 마친 후 대기 상태로 설정
+                if user_id:
+                    save_conversation(user_id, clean_prompt, response)
 
-        if user_question_count >= 5:
-            generate_and_ask_question(user_id)
-            user_question_count = 0
+            if user_question_count >= 5:
+                generate_and_ask_question(user_id)
+                user_question_count = 0  # 카운트 초기화
 
-        if len(convo) > 20:
-            convo = convo[-20:]
-    else:
-        print(f'Invalid input. Please start with "{wake_word}".')
+            if len(convo) > 20:
+                convo = convo[-20:]
 
-def start_listening():
-    with source as s:
-        r.adjust_for_ambient_noise(s, duration=2)
-    print('\nSay', wake_word, 'followed with your prompt. \n')
-    r.listen_in_background(source, callback)
+        else:
+            print(f'Invalid input. Please start with "{wake_word}".')
 
-    while True:
-        time.sleep(.5)
-
-def extract_prompt(transcribed_text, wake_word):
-    pattern = rf'\b{re.escape(wake_word)}[\s,.?!]*([가-힣A-Za-z0-9].*)'
-    match = re.search(pattern, transcribed_text, re.IGNORECASE)
-
-    if match:
-        prompt = match.group(1).strip()
-        return prompt
-    else:
-        return None
-
-start_listening()
+if __name__ == "__main__":
+    handle_input()
