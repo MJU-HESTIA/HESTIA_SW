@@ -11,7 +11,7 @@
 
   cd HESTIA_SW
 
-  conda create -n hestia python=3.11.6 opencv=4.9.0 cuda=12.2
+  conda create -n hestia python=3.11.6 opencv=4.9.0 cuda=12.2 pyaudio=0.2.11
 
   conda activate hestia
 
