@@ -59,9 +59,9 @@ embedding_model = SentenceTransformer("bespin-global/klue-sroberta-base-continue
 
 ser = serial.Serial('/dev/ttyTHS1', 9600, timeout=1)
 
-temp = None
-gas = None # gas 감지하면 1
-light = None # 빛을 받으면 1 
+temp = 0
+gas = 0 # gas 감지하면 1
+light = 1 # 빛을 받으면 1 
 previous_light = light
 previous_gas = gas
 temp_warning_given = False
@@ -156,6 +156,11 @@ def send_led_on_command():
     ser.write((command + '\n').encode('utf-8'))
     print(f'Sent to ESP32: {command}')
 
+def send_led_off_command():
+    command = "led_off"
+    ser.write((command + '\n').encode('utf-8'))
+    print(f'Sent to ESP32: {command}')
+
 def monitor_gas():
     global gas
     global previous_gas
@@ -184,6 +189,11 @@ def send_fan_on_command():
     command = "fan_on"
     ser.write((command + '\n').encode('utf-8'))
     print(f'Sent to ESP32: {command}')    
+
+def send_fan_off_command():
+    command = "fan_off"
+    ser.write((command + '\n').encode('utf-8'))
+    print(f'Sent to ESP32: {command}') 
 
 def delayed_temp_warning():
     global temp
@@ -890,10 +900,9 @@ def handle_input():
     # threading.Thread(target=change_gas, daemon=True).start()
     # threading.Thread(target=change_temp, daemon=True).start()
 
-    # 조도 센서, 가스 센서, 온도 모니터링을 별도의 스레드에서 실행
-    threading.Thread(target=monitor_light, daemon=True).start()
-    threading.Thread(target=monitor_gas, daemon=True).start()
-    threading.Thread(target=monitor_temp, daemon=True).start()
+    #시리얼 통신을 위한 스레드 실행
+    read_thread = threading.Thread(target=read_from_esp32, daemon=True)
+    read_thread.start()
 
     # tkinter GUI 설정을 한 번만 호출
     threading.Thread(target=create_gui).start()
@@ -912,23 +921,23 @@ def handle_input():
         if chatbot_speaking:
             continue  # 챗봇이 말을 마칠 때까지 다른 입력을 무시
         
-        if "선풍기 틀어줘" in user_input:
-            response = "네! 선풍기를 틀어드릴게요!"
-            convo.append({'role': 'assistant', 'content': response})
-            print(f'ASSISTANT: {response}')
-            speak_async(response)
-            send_fan_on_command()
-            chatbot_speaking = False
-            continue    
+        # if "선풍기 틀어줘" in user_input:
+        #     response = "네! 선풍기를 틀어드릴게요!"
+        #     convo.append({'role': 'assistant', 'content': response})
+        #     print(f'ASSISTANT: {response}')
+        #     speak_async(response)
+        #     send_fan_on_command()
+        #     chatbot_speaking = False
+        #     continue    
 
-        if "불 켜줘" in user_input or "조명 켜줘" in user_input or "불 좀 켜줘" in user_input:
-            response = "네! 불을 켜드릴게요!"
-            convo.append({'role': 'assistant', 'content': response})
-            print(f'ASSISTANT: {response}')
-            speak_async(response)
-            send_led_on_command()
-            chatbot_speaking = False
-            continue
+        # if "불 켜줘" in user_input or "조명 켜줘" in user_input or "불 좀 켜줘" in user_input:
+        #     response = "네! 불을 켜드릴게요!"
+        #     convo.append({'role': 'assistant', 'content': response})
+        #     print(f'ASSISTANT: {response}')
+        #     speak_async(response)
+        #     send_led_on_command()
+        #     chatbot_speaking = False
+        #     continue
 
         if user_input.lower().startswith(wake_word.lower()):
             reset_timer()
@@ -952,6 +961,18 @@ def handle_input():
                 response = parse_alarm_time_and_set(clean_prompt)
             elif "알람 취소해줘" in clean_prompt:
                 response = cancel_alarm(clean_prompt)
+            elif "선풍기 틀어줘" in clean_prompt:
+                response = "네! 선풍기를 틀어드릴게요!"
+                send_fan_on_command()
+            elif "선풍기 꺼줘" in clean_prompt:
+                response = "네! 선풍기를 꺼드릴게요!"
+                send_fan_off_command()
+            elif "불 켜줘" in clean_prompt or "조명 켜줘" in clean_prompt or "불 좀 켜줘" in clean_prompt:
+                response = "네! 불을 켜드릴게요!"
+                send_led_on_command()
+            elif "불 꺼줘" in clean_prompt or "조명 꺼줘" in clean_prompt or "불 좀 꺼줘" in clean_prompt:
+                response = "네! 불을 꺼드릴게요!"
+                send_led_off_command()
             elif "현재 온도" in clean_prompt:
                 response = check_temperature()
             else:
