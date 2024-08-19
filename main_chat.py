@@ -21,6 +21,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import queue
 import pyaudio
+import serial
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -56,9 +57,11 @@ except Exception as e:
 # SentenceTransformer 모델 로드
 embedding_model = SentenceTransformer("bespin-global/klue-sroberta-base-continue-learning-by-mnr")
 
-temp = 25
-gas = 0 # gas 감지하면 1
-light = 1 # 빛을 받으면 1 
+ser = serial.Serial('/dev/ttyTHS1', 9600, timeout=1)
+
+temp = None
+gas = None # gas 감지하면 1
+light = None # 빛을 받으면 1 
 previous_light = light
 previous_gas = gas
 temp_warning_given = False
@@ -90,6 +93,44 @@ def gstreamer_pipeline(
         )
     )
 
+def read_from_esp32():
+    global temp, gas, light
+    
+    while True:
+        if ser.in_waiting > 0:
+            try:
+                # ESP32로부터 데이터 읽기
+                data = ser.readline().decode('utf-8').rstrip()
+            except UnicodeDecodeError:
+                data = ser.readline().decode('utf-8', errors='ignore').rstrip()
+            
+            # 수신된 데이터가 올바른 형식인지 확인
+            if data.startswith('<') and data.endswith('>'):
+                data_type = data[1]
+                data_value = data[3:-1]
+                
+                if data_type == 'T':  # 온도 데이터
+                    try:
+                        temp = float(data_value)
+                        print(f"Temperature: {temp}°C")
+                    except ValueError:
+                        print(f"Invalid temperature data: {data_value}")
+                
+                elif data_type == 'G':  # 가스 데이터
+                    gas = bool(int(data_value))
+                    gas_status = "Gas detected" if gas else "No gas detected"
+                    print(f"Gas Sensor: {gas_status}")
+                
+                elif data_type == 'L':  # 조도 데이터
+                    light = bool(int(data_value))
+                    light_status = "Light detected" if light else "No light detected"
+                    print(f"Light Sensor: {light_status}")
+                
+                else:
+                    print(f"Unknown data type: {data}")
+            else:
+                print(f"Invalid packet format: {data}")
+
 # 조도 센서의 값을 지속적으로 모니터링하는 함수
 def monitor_light():
     global light
@@ -109,6 +150,11 @@ def monitor_light():
         
         # 잠시 대기 (이 시간을 조정하여 센서 데이터를 읽는 주기를 설정할 수 있음)
         time.sleep(1)
+
+def send_led_on_command():
+    command = "led_on"
+    ser.write((command + '\n').encode('utf-8'))
+    print(f'Sent to ESP32: {command}')
 
 def monitor_gas():
     global gas
@@ -133,6 +179,11 @@ def reset_temp_warning():
     global temp_warning_given
     temp_warning_given = False
     print("temp_warning_given이 다시 False로 설정되었습니다.")
+
+def send_fan_on_command():
+    command = "fan_on"
+    ser.write((command + '\n').encode('utf-8'))
+    print(f'Sent to ESP32: {command}')    
 
 def delayed_temp_warning():
     global temp
@@ -839,6 +890,11 @@ def handle_input():
     # threading.Thread(target=change_gas, daemon=True).start()
     # threading.Thread(target=change_temp, daemon=True).start()
 
+    # 조도 센서, 가스 센서, 온도 모니터링을 별도의 스레드에서 실행
+    threading.Thread(target=monitor_light, daemon=True).start()
+    threading.Thread(target=monitor_gas, daemon=True).start()
+    threading.Thread(target=monitor_temp, daemon=True).start()
+
     # tkinter GUI 설정을 한 번만 호출
     threading.Thread(target=create_gui).start()
 
@@ -856,6 +912,24 @@ def handle_input():
         if chatbot_speaking:
             continue  # 챗봇이 말을 마칠 때까지 다른 입력을 무시
         
+        if "선풍기 틀어줘" in user_input:
+            response = "네! 선풍기를 틀어드릴게요!"
+            convo.append({'role': 'assistant', 'content': response})
+            print(f'ASSISTANT: {response}')
+            speak_async(response)
+            send_fan_on_command()
+            chatbot_speaking = False
+            continue    
+
+        if "불 켜줘" in user_input or "조명 켜줘" in user_input or "불 좀 켜줘" in user_input:
+            response = "네! 불을 켜드릴게요!"
+            convo.append({'role': 'assistant', 'content': response})
+            print(f'ASSISTANT: {response}')
+            speak_async(response)
+            send_led_on_command()
+            chatbot_speaking = False
+            continue
+
         if user_input.lower().startswith(wake_word.lower()):
             reset_timer()
             user_question_count += 1

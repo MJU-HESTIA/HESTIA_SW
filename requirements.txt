@@ -17,3 +17,7 @@ groq==0.6.0
 PyAudio==0.2.14
 faster-whisper==1.0.3
 SpeechRecognition==3.10.1
+
+serial==0.0.97
+pyserial==3.5
+
