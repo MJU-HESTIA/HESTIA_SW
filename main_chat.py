@@ -447,10 +447,24 @@ groq_client = Groq(api_key=groq_api_key)
 genai.configure(api_key=gemini_api_key)
 openai_client = OpenAI(api_key=openai_api_key)
 
+player_stream = None
+player_lock = threading.Lock()
+
+def stop_speaking():
+    global player_stream
+    with player_lock:
+        if player_stream is not None and not player_stream.is_stopped():
+            player_stream.stop_stream()
+            player_stream.close()
+            player_stream = None
+
 def speak(text):
-    player_stream = pyaudio.PyAudio().open(format=pyaudio.paInt16, channels=1, rate=24000, output=True, frames_per_buffer=1024)
-    stream_start = False
+    global player_stream
+    stop_speaking()  # Stop any ongoing speech before starting a new one
     
+    player_stream = pyaudio.PyAudio().open(format=pyaudio.paInt16, channels=1, rate=24000, output=True)
+    
+    stream_start = False
     with openai_client.audio.speech.with_streaming_response.create(
         model='tts-1',
         voice='nova',
@@ -459,15 +473,19 @@ def speak(text):
     ) as response:
         silence_threshold = 0.01
         for chunk in response.iter_bytes(chunk_size=1024):
-            if stream_start:
-                player_stream.write(chunk)
-            else:
-                if max(chunk) > silence_threshold:
+            if player_stream is not None and not player_stream.is_stopped():
+                if stream_start:
                     player_stream.write(chunk)
-                    stream_start = True
-                    
+                else:
+                    if max(chunk) > silence_threshold:
+                        player_stream.write(chunk)
+                        stream_start = True
+            else:
+                break  # 스트림이 중지되었으면 루프를 종료
+    
+    stop_speaking()  # Clean up the player stream after speaking is done
+
 def speak_async(text):
-    # speak 함수를 별도의 스레드에서 실행
     speak_thread = threading.Thread(target=speak, args=(text,))
     speak_thread.start()
 
@@ -546,7 +564,7 @@ def create_gui():
 
     # 이미지 표시 레이블
     img_label = tk.Label(frame)
-    img_label.pack(pady=20)
+    img_label.pack(pady=10)
 
     # 상태 표시 레이블
     status_label = tk.Label(frame, text="", font=("Arial", 14))
@@ -574,7 +592,7 @@ def show_start_image():
     try:
         start_image_path = "start_image.jpg"
         img_data = Image.open(start_image_path)
-        img_data.thumbnail((800, 800))  # 이미지 크기 조정
+        img_data.thumbnail((950, 950))  # 이미지 크기 조정
         img_tk = ImageTk.PhotoImage(img_data)
 
         # GUI 업데이트 작업을 큐에 추가
@@ -611,7 +629,7 @@ def generate_image(prompt):
         img_data = Image.open(BytesIO(image_response.content))
 
         # 이미지 크기 조정
-        img_data.thumbnail((800, 800))  # 이미지 크기 조정
+        img_data.thumbnail((950, 950))  # 이미지 크기 조정
 
         # tkinter 이미지 변환
         img_tk = ImageTk.PhotoImage(img_data)
@@ -620,7 +638,7 @@ def generate_image(prompt):
         task_queue.put(lambda: update_gui(img_tk, None))
         img_data.save("generated_image.png")
     except Exception as e:
-        task_queue.put(lambda: update_gui(None, f"Failed to generate image: {str(e)}"))
+        task_queue.put(lambda e=e: update_gui(None, f"Failed to generate image: {str(e)}"))
 
 # 프롬프트로부터 이미지를 생성하고 업데이트하는 스레드 함수
 def start_image_generation(prompt):
@@ -692,12 +710,22 @@ def generate_and_ask_question(user_id):
     # 이전 대화를 문자열로 변환
     conversation_history = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
 
-# 이미 정의된 Gemini 모델 객체를 사용하여 질문 생성
-    response = model.generate_content(
-        conversation_history + "\n사용자에게 친근하게 질문을 시작해"
-    )
+    # 이미 정의된 Gemini 모델 객체를 사용하여 질문 생성
+    try:
+        response = model.generate_content(
+            conversation_history + "\n사용자에게 친근하게 질문을 시작해"
+        )
 
-    generated_question = response.text.strip()
+        # 응답이 존재하는지 확인
+        if response and response.text:
+            generated_question = response.text.strip()
+        else:
+            print(f"응답 없음 또는 프롬프트 차단: {response.prompt_feedback if response else 'No response'}")
+            generated_question = "깜빡 졸았어요.. 무슨 말을 하고 있었죠? 다시 말해주세요.."  # 기본 질문 설정
+
+    except Exception as e:
+        print(f"Gemini 모델 응답 생성 오류: {e}")
+        generated_question = "깜빡 졸았어요.. 무슨 말을 하고 있었죠? 다시 말해주세요.."
 
     # 생성된 질문을 대화에 추가하고 출력
     convo.append({'role': 'assistant', 'content': generated_question})
@@ -708,6 +736,7 @@ def generate_and_ask_question(user_id):
         save_conversation(user_id, " ".join([msg for msg, resp in conversations]), generated_question)
     
     return generated_question
+
 
 # 사용자 명령에 따라 웹 검색, 웹캡 캡처 등의 기능 호출 결정 함수
 def function_call(prompt):
@@ -882,6 +911,9 @@ def handle_input():
     # 나머지 대화 기록은 임베딩된 데이터로 불러옵니다.
     all_embeddings = load_conversation_embeddings(user_id) if user_id else []
 
+    # tkinter GUI 설정을 한 번만 호출
+    threading.Thread(target=create_gui).start()
+
     # 챗봇이 첫 번째 메시지를 사용자에게 보냅니다.
     initial_message = "안녕하세요 헤스티아입니다"
     convo.append({'role': 'assistant', 'content': initial_message})
@@ -904,9 +936,6 @@ def handle_input():
     read_thread = threading.Thread(target=read_from_esp32, daemon=True)
     read_thread.start()
 
-    # tkinter GUI 설정을 한 번만 호출
-    threading.Thread(target=create_gui).start()
-
     while True:
         user_input = input(f"Say '{wake_word}': ").strip()
 
@@ -921,24 +950,6 @@ def handle_input():
         if chatbot_speaking:
             continue  # 챗봇이 말을 마칠 때까지 다른 입력을 무시
         
-        # if "선풍기 틀어줘" in user_input:
-        #     response = "네! 선풍기를 틀어드릴게요!"
-        #     convo.append({'role': 'assistant', 'content': response})
-        #     print(f'ASSISTANT: {response}')
-        #     speak_async(response)
-        #     send_fan_on_command()
-        #     chatbot_speaking = False
-        #     continue    
-
-        # if "불 켜줘" in user_input or "조명 켜줘" in user_input or "불 좀 켜줘" in user_input:
-        #     response = "네! 불을 켜드릴게요!"
-        #     convo.append({'role': 'assistant', 'content': response})
-        #     print(f'ASSISTANT: {response}')
-        #     speak_async(response)
-        #     send_led_on_command()
-        #     chatbot_speaking = False
-        #     continue
-
         if user_input.lower().startswith(wake_word.lower()):
             reset_timer()
             user_question_count += 1
@@ -1011,10 +1022,11 @@ def handle_input():
                         response = groq_prompt(prompt=clean_prompt, img_context=visual_context)
 
             if response:
+                # 이미지 생성 및 업데이트
+                threading.Thread(target=start_image_generation, args=(response,)).start()
                 convo.append({'role': 'assistant', 'content': response})
                 print(f'ASSISTANT: {response}')
                 speak_async(response)
-                threading.Thread(target=start_image_generation, args=(response,)).start()
                 chatbot_speaking = False  # 챗봇이 응답을 마친 후 대기 상태로 설정
                 if user_id:
                     save_conversation(user_id, clean_prompt, response)
