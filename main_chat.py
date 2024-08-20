@@ -195,32 +195,32 @@ def send_fan_off_command():
     ser.write((command + '\n').encode('utf-8'))
     print(f'Sent to ESP32: {command}') 
 
-def delayed_temp_warning():
-    global temp
-    global convo
+# def delayed_temp_warning():
+#     global temp
+#     global convo
 
-    response = f"현재 실내온도가 {temp}도에요, 더우시지 않으세요? 선풍기를 틀어드릴까요?"
-    convo.append({'role': 'assistant', 'content': response})
-    print(f'ASSISTANT: {response}')
-    speak_async(response)
+#     response = f"현재 실내온도가 {temp}도에요, 더우시지 않으세요? 선풍기를 틀어드릴까요?"
+#     convo.append({'role': 'assistant', 'content': response})
+#     print(f'ASSISTANT: {response}')
+#     speak_async(response)
 
     # 1시간 뒤에 temp_warning_given 플래그를 False로 재설정하는 타이머 시작
     threading.Timer(3600, reset_temp_warning).start()
 
 # 온도를 지속적으로 모니터링하는 함수
-def monitor_temp():
-    global temp
-    global temp_warning_given
+# def monitor_temp():
+#     global temp
+#     global temp_warning_given
 
-    while True:
-        # 온도가 26도 이상이면서 아직 경고 메시지가 출력되지 않은 경우
-        if temp >= 26 and not temp_warning_given:
-            temp_warning_given = True  # 플래그를 즉시 설정하여 중복 메시지 방지
-            # 30초 후에 경고 메시지를 출력하는 타이머 시작
-            threading.Timer(30, delayed_temp_warning).start()
+#     while True:
+#         # 온도가 26도 이상이면서 아직 경고 메시지가 출력되지 않은 경우
+#         if temp >= 26 and not temp_warning_given:
+#             temp_warning_given = True  # 플래그를 즉시 설정하여 중복 메시지 방지
+#             # 30초 후에 경고 메시지를 출력하는 타이머 시작
+#             threading.Timer(30, delayed_temp_warning).start()
 
-        # 잠시 대기 (온도 체크 주기)
-        time.sleep(1)
+#         # 잠시 대기 (온도 체크 주기)
+#         time.sleep(1)
 
 def check_temperature():
     global temp
@@ -447,23 +447,8 @@ groq_client = Groq(api_key=groq_api_key)
 genai.configure(api_key=gemini_api_key)
 openai_client = OpenAI(api_key=openai_api_key)
 
-player_stream = None
-player_lock = threading.Lock()
-
-def stop_speaking():
-    global player_stream
-    with player_lock:
-        if player_stream is not None and not player_stream.is_stopped():
-            player_stream.stop_stream()
-            player_stream.close()
-            player_stream = None
-
 def speak(text):
-    global player_stream
-    stop_speaking()  # Stop any ongoing speech before starting a new one
-    
-    player_stream = pyaudio.PyAudio().open(format=pyaudio.paInt16, channels=1, rate=24000, output=True)
-    
+    player_stream = pyaudio.PyAudio().open(format=pyaudio.paInt16, channels=1, rate=24000, output=True, frames_per_buffer=1024)
     stream_start = False
     with openai_client.audio.speech.with_streaming_response.create(
         model='tts-1',
@@ -473,19 +458,14 @@ def speak(text):
     ) as response:
         silence_threshold = 0.01
         for chunk in response.iter_bytes(chunk_size=1024):
-            if player_stream is not None and not player_stream.is_stopped():
-                if stream_start:
-                    player_stream.write(chunk)
-                else:
-                    if max(chunk) > silence_threshold:
-                        player_stream.write(chunk)
-                        stream_start = True
+            if stream_start:
+                player_stream.write(chunk)
             else:
-                break  # 스트림이 중지되었으면 루프를 종료
-    
-    stop_speaking()  # Clean up the player stream after speaking is done
-
+                if max(chunk) > silence_threshold:
+                    player_stream.write(chunk)
+                    stream_start = True
 def speak_async(text):
+    # speak 함수를 별도의 스레드에서 실행
     speak_thread = threading.Thread(target=speak, args=(text,))
     speak_thread.start()
 
@@ -555,7 +535,6 @@ def create_gui():
 
     # 메인 윈도우 설정
     root = tk.Tk()
-    root.title("DALL·E 3 Image Generator")
     root.attributes('-fullscreen', True)  # 전체 화면 모드
 
     # 레이아웃 설정
@@ -673,7 +652,7 @@ def check_inactivity(user_id):
     while True:
         if last_interaction_time:
             time_since_last_interaction = (datetime.now() - last_interaction_time).total_seconds()
-            if time_since_last_interaction > 300:  # 5분(300초) 동안 사용자가 반응하지 않은 경우
+            if time_since_last_interaction > 120:  # 5분(300초) 동안 사용자가 반응하지 않은 경우
                 user_state = check_user_state_with_webcam()  # 웹캠을 사용하여 사용자의 상태를 확인합니다.
                 print(f'ASSISTANT: {user_state}')
                 speak_async(user_state)
@@ -926,7 +905,7 @@ def handle_input():
     # 조도 센서, 가스 센서, 온도 모니터링을 별도의 스레드에서 실행
     threading.Thread(target=monitor_light, daemon=True).start()
     threading.Thread(target=monitor_gas, daemon=True).start()
-    threading.Thread(target=monitor_temp, daemon=True).start()
+    # threading.Thread(target=monitor_temp, daemon=True).start()
 
     # threading.Thread(target=change_light, daemon=True).start()
     # threading.Thread(target=change_gas, daemon=True).start()
@@ -1031,7 +1010,7 @@ def handle_input():
                 if user_id:
                     save_conversation(user_id, clean_prompt, response)
 
-            if user_question_count >= 5:
+            if user_question_count >= 1000:
                 generate_and_ask_question(user_id)
                 user_question_count = 0  # 카운트 초기화
 

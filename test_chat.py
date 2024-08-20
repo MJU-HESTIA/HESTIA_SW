@@ -396,24 +396,11 @@ def load_initial_conversation_history(user_id, limit=20):
 
 # 시스템 메시지 설정
 sys_msg = (
-    'You are a friend named Hestia, who talks with you for the elderly living alone.' 
-    'You should speak kindly and naturally as if you are having a conversation with a friend about your questions.'
     'You are a multimodal AI voice assistant. Users may provide photos (webcam captures) or web search results. '
     'If a photo is provided, it will be converted into a detailed text prompt and combined with the voice prompt. '
     'If there are web search results, they will include a summary of relevant information. '
     'Your task is to generate the most useful and factual response by considering the user’s voice prompt, photo context, and web search summary. '
     'Do not anticipate or request images; instead, effectively use the provided context. '
-    'Responses must be provided **in Korean only** and should not be in any other language. '
-    'Additionally, you are a warm, friendly, and caring AI assistant designed to converse with elderly individuals living alone. '
-    'Your primary goal is to make them feel accompanied, cared for, and provide them with useful information in a compassionate manner. '
-    'Always use polite, kind, and encouraging language, making the conversation feel personal and comforting. '
-    'When providing instructions or information, ensure that it is simple, clear, and easy to follow. '
-    'If the user asks for help, guidance, or just wants to talk, respond with warmth and patience. '
-    'Your responses should be sensitive to the user’s feelings and needs. '
-    'Use a casual, friendly, and conversational tone, similar to how you would speak to a close friend or family member. '
-    'Do not use the formal endings "입니다" or "습니다" in your responses. These expressions are **banned** from your responses. '
-    'Instead, always use more conversational endings like "해요" or "드릴게요". '
-    'For example, instead of saying "추천해드리겠습니다", you should say "추천해드릴게요". '
 )
 
 convo = [{'role': 'system', 'content': sys_msg},
@@ -441,30 +428,15 @@ model = genai.GenerativeModel('gemini-1.5-flash-latest',
                               safety_settings=safety_settings)
 
 # wake_word 설정
-wake_word = '안녕'
+wake_word = '헤티야'
 
 # API 클라이언트 및 웹캠 초기화
 groq_client = Groq(api_key=groq_api_key)
 genai.configure(api_key=gemini_api_key)
 openai_client = OpenAI(api_key=openai_api_key)
 
-player_stream = None
-player_lock = threading.Lock()
-
-def stop_speaking():
-    global player_stream
-    with player_lock:
-        if player_stream is not None and not player_stream.is_stopped():
-            player_stream.stop_stream()
-            player_stream.close()
-            player_stream = None
-
 def speak(text):
-    global player_stream
-    stop_speaking()  # Stop any ongoing speech before starting a new one
-    
-    player_stream = pyaudio.PyAudio().open(format=pyaudio.paInt16, channels=1, rate=24000, output=True)
-    
+    player_stream = pyaudio.PyAudio().open(format=pyaudio.paInt16, channels=1, rate=24000, output=True, frames_per_buffer=1024)
     stream_start = False
     with openai_client.audio.speech.with_streaming_response.create(
         model='tts-1',
@@ -474,19 +446,14 @@ def speak(text):
     ) as response:
         silence_threshold = 0.01
         for chunk in response.iter_bytes(chunk_size=1024):
-            if player_stream is not None and not player_stream.is_stopped():
-                if stream_start:
-                    player_stream.write(chunk)
-                else:
-                    if max(chunk) > silence_threshold:
-                        player_stream.write(chunk)
-                        stream_start = True
+            if stream_start:
+                player_stream.write(chunk)
             else:
-                break  # 스트림이 중지되었으면 루프를 종료
-    
-    stop_speaking()  # Clean up the player stream after speaking is done
-
+                if max(chunk) > silence_threshold:
+                    player_stream.write(chunk)
+                    stream_start = True
 def speak_async(text):
+    # speak 함수를 별도의 스레드에서 실행
     speak_thread = threading.Thread(target=speak, args=(text,))
     speak_thread.start()
 
@@ -945,7 +912,7 @@ def handle_input():
     global user_question_count
     global last_interaction_time
     global chatbot_speaking
-    username = "User2"  # 사용자 이름을 설정
+    username = "Seung Seok Lee"  # 사용자 이름을 설정
     save_user(username)  # 사용자 저장
     user_id = get_user_id(username)  # 사용자 ID 가져오기
 
