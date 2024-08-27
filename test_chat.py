@@ -1,3 +1,5 @@
+# ollama 연결
+######################################################################################
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModel
 from PIL import Image, ImageTk
