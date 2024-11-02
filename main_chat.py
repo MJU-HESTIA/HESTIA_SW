@@ -216,8 +216,8 @@ def monitor_temp():
     global temp_warning_given
 
     while True:
-        # 온도가 26도 이상이면서 아직 경고 메시지가 출력되지 않은 경우
-        if temp >= 26 and not temp_warning_given:
+        # 온도가 28도 이상이면서 아직 경고 메시지가 출력되지 않은 경우
+        if temp >= 28 and not temp_warning_given:
             temp_warning_given = True  # 플래그를 즉시 설정하여 중복 메시지 방지
             # 30초 후에 경고 메시지를 출력하는 타이머 시작
             threading.Timer(10, delayed_temp_warning).start()
@@ -445,7 +445,7 @@ model = genai.GenerativeModel('gemini-1.5-flash-latest',
                               safety_settings=safety_settings)
 
 # wake_word 설정
-wake_word = '해피야'
+wake_words = ['해피야', '해티야', '패티야', '혜지야']
 
 # API 클라이언트 및 웹캠 초기화
 groq_client = Groq(api_key=groq_api_key)
@@ -489,15 +489,15 @@ def start_listening():
             callback(None, transcribed_text)  # 콜백 함수에 인식된 텍스트를 전달합니다.
         time.sleep(0.5)
 
-def extract_prompt(transcribed_text, wake_word):
-    pattern = rf'\b{re.escape(wake_word)}[\s,.?!]*([가-힣A-Za-z0-9].*)'
-    match = re.search(pattern, transcribed_text, re.IGNORECASE)
+def extract_prompt(transcribed_text, wake_words):
+    for wake_word in wake_words:
+        pattern = rf'\b{re.escape(wake_word)}[\s,.?!]*([가-힣A-Za-z0-9].*)'
+        match = re.search(pattern, transcribed_text, re.IGNORECASE)
 
-    if match:
-        prompt = match.group(1).strip()
-        return prompt
-    else:
-        return None
+        if match:
+            prompt = match.group(1).strip()
+            return prompt
+    return None
 
 stop_tts_flag = False
 
@@ -831,7 +831,7 @@ def web_cam_capture():
             print(f"Image saved: webcam_capture.jpg")
         else:
             print("Error: Failed to capture image")
-        web_cam.release()  # 카메라 리소스 해제
+        # web_cam.release()  # 카메라 리소스 해제
     else:
         print("Error: Unable to open camera")
 
@@ -987,7 +987,7 @@ def callback(recognizer, transcribed_text):
     reset_timer()  # 사용자 활동 시간 갱신
 
     # "잠깐", "잠깐만", "그만" 등의 단어를 웨이크 워드 없이 인식했을 때
-    if wake_word in transcribed_text.lower() and any(x in transcribed_text.lower() for x in ['잠깐', '잠깐만', '그만']):
+    if any(wake_word in transcribed_text.lower() for wake_word in wake_words) and any(x in transcribed_text.lower() for x in ['잠깐', '잠깐만', '그만']):
         stop_tts()  # TTS 중단
         response = "무슨 문제 있으신가요?"
         convo.append({'role': 'assistant', 'content': response})
@@ -995,7 +995,7 @@ def callback(recognizer, transcribed_text):
         speak_async(response)
         return   # 더 이상 처리하지 않고 중단
 
-    clean_prompt = extract_prompt(transcribed_text, wake_word)
+    clean_prompt = extract_prompt(transcribed_text, wake_words)
 
     # 사용자 ID와 대화 기록 불러오기
     if user_id:
@@ -1012,53 +1012,59 @@ def callback(recognizer, transcribed_text):
         print(f'USER: {clean_prompt}')
         convo.append({'role': 'user', 'content': clean_prompt})
 
-        # 유사한 대화 기록 불러오기
-        if all_embeddings:
-            relevant_conversation_ids = load_relevant_conversation_embeddings(clean_prompt, all_embeddings)
-            convo.extend(load_conversation_texts(relevant_conversation_ids))
-
-        if len(convo) > 20:
-            convo = convo[-20:]
-
-        # 알람, 온도, 날짜, 날씨 처리
-        if "알람 맞춰줘" in clean_prompt or "알람 설정해줘" in clean_prompt:
-            response = parse_alarm_time_and_set(clean_prompt)
-        elif "알람 취소해줘" in clean_prompt:
-            response = cancel_alarm(clean_prompt)
-        elif "선풍기 틀어줘" in clean_prompt:
-            response = "네! 선풍기를 틀어드릴게요!"
-            send_fan_on_command()
-        elif "선풍기 꺼줘" in clean_prompt:
-            response = "네! 선풍기를 꺼드릴게요!"
-            send_fan_off_command()
-        elif "불 켜줘" in clean_prompt or "조명 켜줘" in clean_prompt or "불 좀 켜줘" in clean_prompt:
-            response = "네! 불을 켜드릴게요!"
-            send_led_on_command()
-        elif "불 꺼줘" in clean_prompt or "조명 꺼줘" in clean_prompt or "불 좀 꺼줘" in clean_prompt:
-            response = "네! 불을 꺼드릴게요!"
-            send_led_off_command()
-        elif "현재 온도" in clean_prompt:
-            response = check_temperature()
+        # 고정된 응답 설정
+        if "자기소개 해 줘" in clean_prompt:
+            response = "안녕하세요. 당신의 친구, 헤스티아입니다. 당신에게 도움을 주고 대화를 들을 준비가 되어있습니다. 오늘은 무엇이 힘들었나요? 같이 이야기 해보아요."
+        elif "너는 무슨 일을 할 수 있어" in clean_prompt:
+            response = "저는 당신의 주변환경을 보고 판단해서 조언을 드릴 수도 있습니다. 예를 들어 옷을 골라드릴 수도 있죠. 또한 날씨, 시간, 인터넷 검색 등 다양한 일을 도와 드릴 수 있죠. 아! 선풍기나 공기청정기도 틀어드릴 수 있어요."
         else:
-            question_type = check_date_or_weather_question(clean_prompt)
-            if question_type == 'date':
-                response = get_current_date()
-            elif question_type == 'weather':
-                response = get_weather()
-            else:
-                # 기타 명령어 처리
-                call = function_call(clean_prompt)
-                visual_context = None
-                if 'capture webcam' in call:
-                    web_cam_capture()
-                    visual_context = vision_prompt(prompt=clean_prompt, photo_path='webcam_capture.jpg')
+            # 기존 처리 방식 유지
+            if all_embeddings:
+                relevant_conversation_ids = load_relevant_conversation_embeddings(clean_prompt, all_embeddings)
+                convo.extend(load_conversation_texts(relevant_conversation_ids))
 
-                if 'perform web search' in call and ('검색' in clean_prompt or '찾아' in clean_prompt):
-                    search_link = search_google(clean_prompt)
-                    content_text = extract_text_from_url(search_link) if search_link else ''
-                    response = gpt4_prompt(prompt=clean_prompt, img_context=visual_context + '\n\n' + content_text if visual_context else content_text)
+            if len(convo) > 20:
+                convo = convo[-20:]
+
+            # 알람, 온도, 날짜, 날씨 처리
+            if "알람 맞춰줘" in clean_prompt or "알람 설정해줘" in clean_prompt:
+                response = parse_alarm_time_and_set(clean_prompt)
+            elif "알람 취소해줘" in clean_prompt:
+                response = cancel_alarm(clean_prompt)
+            elif "선풍기 틀어" in clean_prompt:
+                response = "네! 선풍기를 틀어드릴게요!"
+                send_fan_on_command()
+            elif "선풍기 꺼" in clean_prompt:
+                response = "네! 선풍기를 꺼드릴게요!"
+                send_fan_off_command()
+            elif "불 켜줘" in clean_prompt or "조명 켜줘" in clean_prompt or "불 좀 켜줘" in clean_prompt:
+                response = "네! 불을 켜드릴게요!"
+                send_led_on_command()
+            elif "불 꺼줘" in clean_prompt or "조명 꺼줘" in clean_prompt or "불 좀 꺼줘" in clean_prompt:
+                response = "네! 불을 꺼드릴게요!"
+                send_led_off_command()
+            elif "현재 온도" in clean_prompt:
+                response = check_temperature()
+            else:
+                question_type = check_date_or_weather_question(clean_prompt)
+                if question_type == 'date':
+                    response = get_current_date()
+                elif question_type == 'weather':
+                    response = get_weather()
                 else:
-                    response = gpt4_prompt(prompt=clean_prompt, img_context=visual_context)
+                    # 기타 명령어 처리
+                    call = function_call(clean_prompt)
+                    visual_context = None
+                    if 'capture webcam' in call:
+                        web_cam_capture()
+                        visual_context = vision_prompt(prompt=clean_prompt, photo_path='webcam_capture.jpg')
+
+                    if 'perform web search' in call and ('검색' in clean_prompt or '찾아' in clean_prompt):
+                        search_link = search_google(clean_prompt)
+                        content_text = extract_text_from_url(search_link) if search_link else ''
+                        response = gpt4_prompt(prompt=clean_prompt, img_context=visual_context + '\n\n' + content_text if visual_context else content_text)
+                    else:
+                        response = gpt4_prompt(prompt=clean_prompt, img_context=visual_context)
 
         if response:
             threading.Thread(target=start_image_generation, args=(response,)).start()
@@ -1078,12 +1084,12 @@ def callback(recognizer, transcribed_text):
         if len(convo) > 20:
             convo = convo[-20:]
     else:
-        print(f'Invalid input. Please start with "{wake_word}".')
-    print('\nSay', wake_word, 'followed with your prompt. \n')
+        print(f'Invalid input. Please start with "{wake_words}".')
+    print('\nSay', wake_words, 'followed with your prompt. \n')
 
 if __name__ == "__main__":
     # 사용자 이름을 초기화합니다.
-    username = "User2"
+    username = "Seung Seok Lee"
     save_user(username)  # 사용자 저장
     user_id = get_user_id(username)  # 사용자 ID 가져오기
 

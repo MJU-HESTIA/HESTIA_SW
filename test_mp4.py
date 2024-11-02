@@ -11,7 +11,6 @@ win.bind("<Escape>", lambda event: win.attributes("-fullscreen", False))
 
 # 비디오 파일 경로
 video_path = "intro.mp4"
-
 # moviepy를 사용해 비디오 로드
 video_clip = VideoFileClip(video_path)
 

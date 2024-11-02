@@ -25,6 +25,8 @@ import queue
 import pyaudio
 import serial
 import speech_recognition as sr
+from moviepy.editor import VideoFileClip
+import pygame
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -263,12 +265,14 @@ def generate_embedding(text):
     return embedding_model.encode(text)
 
 # 질문과 응답을 결합한 임베딩 생성 함수
-def generate_combined_embedding(question, response):
+def generate_combined_embedding(question, response, question_weight=0.8, response_weight=0.2):
+    # 질문과 응답의 임베딩 생성
     question_embedding = generate_embedding(question)
     response_embedding = generate_embedding(response)
+
+    # 가중 평균을 사용한 결합된 임베딩
+    combined_embedding = (question_weight * question_embedding + response_weight * response_embedding)
     
-    # 결합된 임베딩 (여기서는 단순히 평균을 사용)
-    combined_embedding = (question_embedding + response_embedding) / 2
     return combined_embedding
 
 # 대화 내용 저장 함수 수정: 결합 임베딩 추가
@@ -645,7 +649,7 @@ def show_start_image():
     try:
         start_image_path = "start_image.jpg"
         img_data = Image.open(start_image_path)
-        img_data.thumbnail((950, 950))  # 이미지 크기 조정
+        img_data.thumbnail((950, 850))  # 이미지 크기 조정
         img_tk = ImageTk.PhotoImage(img_data)
 
         # GUI 업데이트 작업을 큐에 추가
@@ -682,7 +686,7 @@ def generate_image(prompt):
         img_data = Image.open(BytesIO(image_response.content))
 
         # 이미지 크기 조정
-        img_data.thumbnail((950, 950))  # 이미지 크기 조정
+        img_data.thumbnail((950, 850))  # 이미지 크기 조정
 
         # tkinter 이미지 변환
         img_tk = ImageTk.PhotoImage(img_data)
@@ -1012,53 +1016,74 @@ def callback(recognizer, transcribed_text):
         print(f'USER: {clean_prompt}')
         convo.append({'role': 'user', 'content': clean_prompt})
 
-        # 유사한 대화 기록 불러오기
-        if all_embeddings:
-            relevant_conversation_ids = load_relevant_conversation_embeddings(clean_prompt, all_embeddings)
-            convo.extend(load_conversation_texts(relevant_conversation_ids))
+        # 고정된 응답 설정
+        if "자기소개 해 줘" in clean_prompt:
+            # response = "안녕하세요. 당신의 친구, 헤스티아입니다. 당신에게 도움을 주고 대화를 들을 준비가 되어있습니다. 오늘은 무엇이 힘들었나요? 같이 이야기 해보아요."
 
-        if len(convo) > 20:
-            convo = convo[-20:]
+            # MoviePy 동영상 재생 추가
+            def play_intro_video():
+                clip = VideoFileClip("intro.mp4").resize(height=480)
 
-        # 알람, 온도, 날짜, 날씨 처리
-        if "알람 맞춰줘" in clean_prompt or "알람 설정해줘" in clean_prompt:
-            response = parse_alarm_time_and_set(clean_prompt)
-        elif "알람 취소해줘" in clean_prompt:
-            response = cancel_alarm(clean_prompt)
-        elif "선풍기 틀어줘" in clean_prompt:
-            response = "네! 선풍기를 틀어드릴게요!"
-            send_fan_on_command()
-        elif "선풍기 꺼줘" in clean_prompt:
-            response = "네! 선풍기를 꺼드릴게요!"
-            send_fan_off_command()
-        elif "불 켜줘" in clean_prompt or "조명 켜줘" in clean_prompt or "불 좀 켜줘" in clean_prompt:
-            response = "네! 불을 켜드릴게요!"
-            send_led_on_command()
-        elif "불 꺼줘" in clean_prompt or "조명 꺼줘" in clean_prompt or "불 좀 꺼줘" in clean_prompt:
-            response = "네! 불을 꺼드릴게요!"
-            send_led_off_command()
-        elif "현재 온도" in clean_prompt:
-            response = check_temperature()
+                # Initialize Pygame display
+                clip.preview(fullscreen=True)
+
+                # Manually close the Pygame window
+                pygame.display.quit()
+                pygame.quit()
+                clip.close()
+
+            # 동영상 재생을 별도의 스레드에서 시작
+            threading.Thread(target=play_intro_video).start()
+        elif "너는 무슨 일을 할 수 있어" in clean_prompt:
+            response = "저는 당신의 주변환경을 보고 판단해서 조언을 드릴 수도 있습니다. 예를 들어 옷을 골라드릴 수도 있죠. 또한 날씨, 시간, 인터넷 검색 등 다양한 일을 도와 드릴 수 있죠. 아! 선풍기나 공기청정기도 틀어드릴 수 있어요."
         else:
-            question_type = check_date_or_weather_question(clean_prompt)
-            if question_type == 'date':
-                response = get_current_date()
-            elif question_type == 'weather':
-                response = get_weather()
-            else:
-                # 기타 명령어 처리
-                call = function_call(clean_prompt)
-                visual_context = None
-                if 'capture webcam' in call:
-                    web_cam_capture()
-                    visual_context = vision_prompt(prompt=clean_prompt, photo_path='webcam_capture.jpg')
+            # 기존 처리 방식 유지
+            if all_embeddings:
+                relevant_conversation_ids = load_relevant_conversation_embeddings(clean_prompt, all_embeddings)
+                convo.extend(load_conversation_texts(relevant_conversation_ids))
 
-                if 'perform web search' in call and ('검색' in clean_prompt or '찾아' in clean_prompt):
-                    search_link = search_google(clean_prompt)
-                    content_text = extract_text_from_url(search_link) if search_link else ''
-                    response = gpt4_prompt(prompt=clean_prompt, img_context=visual_context + '\n\n' + content_text if visual_context else content_text)
+            if len(convo) > 20:
+                convo = convo[-20:]
+
+            # 알람, 온도, 날짜, 날씨 처리
+            if "알람 맞춰줘" in clean_prompt or "알람 설정해줘" in clean_prompt:
+                response = parse_alarm_time_and_set(clean_prompt)
+            elif "알람 취소해줘" in clean_prompt:
+                response = cancel_alarm(clean_prompt)
+            elif "선풍기 틀어" in clean_prompt:
+                response = "네! 선풍기를 틀어드릴게요!"
+                send_fan_on_command()
+            elif "선풍기 꺼" in clean_prompt:
+                response = "네! 선풍기를 꺼드릴게요!"
+                send_fan_off_command()
+            elif "불 켜줘" in clean_prompt or "조명 켜줘" in clean_prompt or "불 좀 켜줘" in clean_prompt:
+                response = "네! 불을 켜드릴게요!"
+                send_led_on_command()
+            elif "불 꺼줘" in clean_prompt or "조명 꺼줘" in clean_prompt or "불 좀 꺼줘" in clean_prompt:
+                response = "네! 불을 꺼드릴게요!"
+                send_led_off_command()
+            elif "현재 온도" in clean_prompt:
+                response = check_temperature()
+            else:
+                question_type = check_date_or_weather_question(clean_prompt)
+                if question_type == 'date':
+                    response = get_current_date()
+                elif question_type == 'weather':
+                    response = get_weather()
                 else:
-                    response = gpt4_prompt(prompt=clean_prompt, img_context=visual_context)
+                    # 기타 명령어 처리
+                    call = function_call(clean_prompt)
+                    visual_context = None
+                    if 'capture webcam' in call:
+                        web_cam_capture()
+                        visual_context = vision_prompt(prompt=clean_prompt, photo_path='webcam_capture.jpg')
+
+                    if 'perform web search' in call and ('검색' in clean_prompt or '찾아' in clean_prompt):
+                        search_link = search_google(clean_prompt)
+                        content_text = extract_text_from_url(search_link) if search_link else ''
+                        response = gpt4_prompt(prompt=clean_prompt, img_context=visual_context + '\n\n' + content_text if visual_context else content_text)
+                    else:
+                        response = gpt4_prompt(prompt=clean_prompt, img_context=visual_context)
 
         if response:
             threading.Thread(target=start_image_generation, args=(response,)).start()
