@@ -5,7 +5,7 @@ Jetson Orin Nano에서 **Ollama로 로컬 LLM(Llama3 8B Q4_K_M)** 을 구동해 
 
 > **English summary** — Jetson Orin Nano application of HESTIA, a conversational home assistant for elderly people living alone. The main pipeline (`ollama_chat.py`) runs a local Llama3 8B Q4_K_M model through Ollama, keeps per-user conversation memory in PostgreSQL with sentence embeddings, receives sensor packets from an ESP32 over UART (`/dev/ttyTHS1`, 9600 bps) and sends appliance commands (LED / fan) back. `main_chat.py` is an earlier voice-input version that used the OpenAI GPT-4o API and is kept for comparison.
 
-<!-- 데모 영상 링크: 확인 후 주석 해제 — https://www.youtube.com/watch?v=fuKamIi-SM0 -->
+🎬 **데모 영상:** [HESTIA 시연 (YouTube)](https://www.youtube.com/watch?v=fuKamIi-SM0)
 
 ## 1. 시스템 아키텍처
 
