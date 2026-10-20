@@ -263,12 +263,12 @@ def generate_embedding(text):
     return embedding_model.encode(text)
 
 # 질문과 응답을 결합한 임베딩 생성 함수
-def generate_combined_embedding(question, response):
+def generate_combined_embedding(question, response, question_weight=0.8, response_weight=0.2):
     question_embedding = generate_embedding(question)
     response_embedding = generate_embedding(response)
-    
-    # 결합된 임베딩 (여기서는 단순히 평균을 사용)
-    combined_embedding = (question_embedding + response_embedding) / 2
+
+    # 질문 쪽에 가중치를 둔 결합 임베딩: 검색 시 현재 질문과 비교되므로 질문 표현을 우선
+    combined_embedding = question_weight * question_embedding + response_weight * response_embedding
     return combined_embedding
 
 # 대화 내용 저장 함수 수정: 결합 임베딩 추가
