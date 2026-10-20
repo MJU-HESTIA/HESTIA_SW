@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+# Secrets
+.env
+.env.*
+!.env.example
+*service-account*.json
+*:Zone.Identifier
+# Model weights / large artifacts
+*.gguf
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.bin
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+*.code-workspace
+# HESTIA_SW runtime outputs
+webcam_capture.jpg
+captured_frame.jpg
+capture.jpg
+generated_image.png
+prompt.wav
+*.wav
+results/
+voice_data/
